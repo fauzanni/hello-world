@@ -27,32 +27,35 @@ const ADMIN_LIST = [
 ];
 
 const CACHE_FILE = "cache.json";
-let processedSessions = new Set(); // Set untuk track sesi yang sudah diproses
+
+// Simple structure: key = datastore key, value = sudah dikirim atau belum
+let sentNotifications = {};
 let statsCache = {
   totalHariIni: 0,
   totalBulanIni: 0,
   lastUpdateHariIni: null,
   lastUpdateBulanIni: null,
-  currentDate: null,
-  currentMonth: null
+  currentDate: null
 };
 
 // Load cache
 if (fs.existsSync(CACHE_FILE)) {
   try {
     const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-    processedSessions = new Set(data.processedSessions || []);
+    sentNotifications = data.sentNotifications || {};
     statsCache = data.statsCache || statsCache;
-    console.log("🗂️ Cache berhasil dimuat. Sesi yang sudah diproses:", processedSessions.size);
+    
+    const totalSent = Object.keys(sentNotifications).length;
+    console.log(`🗂️ Cache dimuat. Total notifikasi yang pernah dikirim: ${totalSent}`);
   } catch (err) {
-    console.warn("⚠️ Gagal baca cache.json:", err.message);
+    console.warn("⚠️ Gagal baca cache:", err.message);
   }
 }
 
 function saveCache() {
   try {
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
-      processedSessions: Array.from(processedSessions),
+      sentNotifications,
       statsCache
     }, null, 2));
   } catch (err) {
@@ -60,7 +63,40 @@ function saveCache() {
   }
 }
 
-// Fungsi list semua keys
+// Cleanup cache: hapus entri > 30 hari
+function cleanupOldCache() {
+  const now = Date.now();
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  let cleaned = 0;
+  
+  for (const key in sentNotifications) {
+    const timestamp = sentNotifications[key];
+    if (now - timestamp > thirtyDaysMs) {
+      delete sentNotifications[key];
+      cleaned++;
+    }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`🧹 Cleanup: ${cleaned} entri lama dihapus`);
+    saveCache();
+  }
+}
+
+// Fungsi ambil data dari DataStore
+async function fetchDataStore(key) {
+  try {
+    const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${encodeURIComponent(key)}`;
+    const res = await axios.get(url, {
+      headers: { "x-api-key": API_KEY }
+    });
+    return res.data;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Fungsi list keys dengan prefix
 async function listDataStoreKeys(prefix) {
   try {
     const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries?datastoreName=${DATASTORE_NAME}&prefix=${prefix}&limit=100`;
@@ -74,20 +110,7 @@ async function listDataStoreKeys(prefix) {
   }
 }
 
-// Fungsi ambil data
-async function fetchDataStore(key) {
-  try {
-    const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${encodeURIComponent(key)}`;
-    const res = await axios.get(url, {
-      headers: { "x-api-key": API_KEY }
-    });
-    return res.data;
-  } catch (err) {
-    return null;
-  }
-}
-
-// Fungsi hitung total durasi user di tanggal tertentu
+// Hitung total durasi user pada tanggal tertentu
 async function getTotalDurasiUserByDate(username, dateKey) {
   const prefix = `${username}-${dateKey}`;
   const keys = await listDataStoreKeys(prefix);
@@ -106,22 +129,20 @@ async function getTotalDurasiUserByDate(username, dateKey) {
   return totalMenit;
 }
 
-// Fungsi hitung total hari ini
+// Hitung total hari ini
 async function getTotalDurasiHariIni(forceRefresh = false) {
   const now = new Date();
   const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
   
-  // Reset cache jika ganti hari
+  // Reset jika ganti hari
   if (statsCache.currentDate !== todayKey) {
-    console.log("🔄 Ganti hari terdeteksi, reset cache dan processed sessions");
-    processedSessions.clear();
+    console.log("🔄 Ganti hari, reset cache");
     statsCache.totalHariIni = 0;
     statsCache.currentDate = todayKey;
     statsCache.lastUpdateHariIni = null;
-    saveCache();
   }
   
-  // Gunakan cache jika masih fresh (1 menit)
+  // Gunakan cache (fresh 1 menit)
   if (!forceRefresh && 
       statsCache.lastUpdateHariIni && 
       (Date.now() - statsCache.lastUpdateHariIni) < 60 * 1000) {
@@ -141,24 +162,15 @@ async function getTotalDurasiHariIni(forceRefresh = false) {
   statsCache.lastUpdateHariIni = Date.now();
   saveCache();
   
-  console.log(`✅ Total hari ini: ${totalMenit} menit`);
   return totalMenit;
 }
 
-// Fungsi hitung total bulan ini
+// Hitung total bulan ini
 async function getTotalDurasiBulanIni(forceRefresh = false) {
   const now = new Date();
   const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   
-  // Reset cache jika ganti bulan
-  if (statsCache.currentMonth !== monthKey) {
-    console.log("🔄 Ganti bulan terdeteksi, reset cache bulan");
-    statsCache.totalBulanIni = 0;
-    statsCache.currentMonth = monthKey;
-    statsCache.lastUpdateBulanIni = null;
-  }
-  
-  // Gunakan cache jika masih fresh (5 menit)
+  // Gunakan cache (fresh 5 menit)
   if (!forceRefresh &&
       statsCache.lastUpdateBulanIni && 
       (Date.now() - statsCache.lastUpdateBulanIni) < 5 * 60 * 1000) {
@@ -187,11 +199,10 @@ async function getTotalDurasiBulanIni(forceRefresh = false) {
   statsCache.lastUpdateBulanIni = Date.now();
   saveCache();
   
-  console.log(`✅ Total bulan ini: ${totalMenit} menit`);
   return totalMenit;
 }
 
-// Fungsi format durasi
+// Format durasi
 function formatDurasi(totalMenit) {
   const jam = Math.floor(totalMenit / 60);
   const menit = totalMenit % 60;
@@ -202,15 +213,15 @@ function formatDurasi(totalMenit) {
   return `${menit} menit`;
 }
 
-// Fungsi kirim embed
-async function sendDiscordEmbed(data) {
+// Kirim notifikasi Discord
+async function sendDiscordEmbed(data, datastoreKey) {
   const joinTime = new Date(data.joinTime * 1000);
   const leaveTime = new Date(data.leaveTime * 1000);
   const durasiMenit = Math.floor((data.leaveTime - data.joinTime) / 60);
   const joinStr = joinTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   const leaveStr = leaveTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   
-  // Force refresh stats
+  // Force refresh stats setelah sesi baru
   const totalHariIni = await getTotalDurasiHariIni(true);
   const totalBulanIni = await getTotalDurasiBulanIni(true);
   
@@ -259,9 +270,17 @@ async function sendDiscordEmbed(data) {
         timestamp: new Date().toISOString()
       }]
     });
-    console.log(`✅ Notifikasi terkirim untuk ${data.username}`);
+    
+    console.log(`✅ Notifikasi terkirim: ${data.username} (${datastoreKey})`);
+    
+    // Tandai sebagai sudah dikirim
+    sentNotifications[datastoreKey] = Date.now();
+    saveCache();
+    
+    return true;
   } catch (err) {
     console.error(`❌ Gagal kirim Discord:`, err.message);
+    return false;
   }
 }
 
@@ -272,34 +291,38 @@ async function checkAdmins() {
   const now = new Date();
   const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
   
-  let newSessionsFound = 0;
+  let newSessions = 0;
+  let skippedSessions = 0;
   
   for (const username of ADMIN_LIST) {
     const prefix = `${username}-${todayKey}`;
     const keys = await listDataStoreKeys(prefix);
     
     for (const keyObj of keys) {
-      // Buat ID unik untuk sesi ini
-      const sessionId = keyObj.key;
+      const datastoreKey = keyObj.key;
       
-      // Skip jika sudah pernah diproses
-      if (processedSessions.has(sessionId)) {
+      // CEK: Sudah pernah dikirim?
+      if (sentNotifications[datastoreKey]) {
+        skippedSessions++;
+        continue; // Skip, sudah pernah dikirim
+      }
+      
+      // Ambil data
+      const data = await fetchDataStore(datastoreKey);
+      
+      // CEK: Apakah sesi sudah selesai (ada leaveTime)?
+      if (!data || !data.leaveTime) {
+        // Player masih online atau data tidak lengkap, skip
         continue;
       }
       
-      const data = await fetchDataStore(keyObj.key);
+      // Sesi baru yang selesai dan belum pernah dikirim!
+      console.log(`🆕 Sesi baru selesai: ${username}`);
+      const success = await sendDiscordEmbed(data, datastoreKey);
       
-      // Hanya proses jika leaveTime sudah ada (sesi selesai)
-      if (data && data.joinTime && data.leaveTime) {
-        console.log(`🆕 Sesi baru: ${username} (${sessionId})`);
-        await sendDiscordEmbed(data);
-        
-        // Tandai sebagai sudah diproses
-        processedSessions.add(sessionId);
-        newSessionsFound++;
-        saveCache();
-        
-        // Delay untuk menghindari rate limit Discord
+      if (success) {
+        newSessions++;
+        // Delay untuk avoid Discord rate limit
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
@@ -309,50 +332,21 @@ async function checkAdmins() {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   
-  if (newSessionsFound === 0) {
-    console.log("✅ Tidak ada sesi baru");
-  } else {
-    console.log(`✅ ${newSessionsFound} sesi baru diproses`);
-  }
-  
-  console.log(`📦 Total sesi dalam cache: ${processedSessions.size}`);
+  console.log(`📊 Ringkasan: ${newSessions} notif baru, ${skippedSessions} sesi sudah pernah dikirim`);
   console.log("⏳ Tunggu 30 detik...");
-}
-
-// Cleanup cache lama (hapus sesi > 7 hari yang lalu)
-function cleanupOldSessions() {
-  const now = new Date();
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const cutoffYear = sevenDaysAgo.getUTCFullYear();
-  const cutoffMonth = String(sevenDaysAgo.getUTCMonth() + 1).padStart(2, "0");
-  const cutoffDay = String(sevenDaysAgo.getUTCDate()).padStart(2, "0");
-  const cutoffKey = `${cutoffYear}-${cutoffMonth}-${cutoffDay}`;
-  
-  const oldSize = processedSessions.size;
-  const filtered = new Set(
-    Array.from(processedSessions).filter(sessionId => {
-      const match = sessionId.match(/-(\d{4}-\d{2}-\d{2})-/);
-      if (match && match[1] < cutoffKey) {
-        return false; // Hapus
-      }
-      return true; // Simpan
-    })
-  );
-  
-  processedSessions = filtered;
-  const removed = oldSize - processedSessions.size;
-  
-  if (removed > 0) {
-    console.log(`🧹 Cleanup: ${removed} sesi lama dihapus dari cache`);
-    saveCache();
-  }
 }
 
 // Jalankan
 (async () => {
+  // Cleanup cache saat start
+  cleanupOldCache();
+  
+  // Jalankan pengecekan pertama
   await checkAdmins();
+  
+  // Jalankan setiap 30 detik
   setInterval(checkAdmins, 30 * 1000);
   
-  // Cleanup setiap 6 jam
-  setInterval(cleanupOldSessions, 6 * 60 * 60 * 1000);
+  // Cleanup otomatis setiap 24 jam
+  setInterval(cleanupOldCache, 24 * 60 * 60 * 1000);
 })();
