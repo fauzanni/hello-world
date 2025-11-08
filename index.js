@@ -27,9 +27,9 @@ const ADMIN_LIST = [
 ];
 
 const CACHE_FILE = "cache.json";
-let lastLeaveTimes = {};
+let sessionHistory = {}; // Track semua sesi yang sudah diproses
 let statsCache = {
-  totalHariIni: {},  // Ubah jadi object per tanggal
+  totalHariIni: {},
   totalBulanIni: {},
   lastUpdateHariIni: null,
   lastUpdateBulanIni: null,
@@ -40,7 +40,7 @@ let statsCache = {
 if (fs.existsSync(CACHE_FILE)) {
   try {
     const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-    lastLeaveTimes = data.lastLeaveTimes || {};
+    sessionHistory = data.sessionHistory || {};
     statsCache = data.statsCache || statsCache;
     console.log("🗂️ Cache berhasil dimuat dari cache.json");
   } catch {
@@ -51,7 +51,7 @@ if (fs.existsSync(CACHE_FILE)) {
 function saveCache() {
   try {
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
-      lastLeaveTimes,
+      sessionHistory,
       statsCache
     }, null, 2));
   } catch (err) {
@@ -59,10 +59,10 @@ function saveCache() {
   }
 }
 
-// Fungsi untuk list semua keys dengan prefix tertentu
+// Fungsi list semua keys dengan prefix
 async function listDataStoreKeys(prefix) {
   try {
-    const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries?datastoreName=${DATASTORE_NAME}&prefix=${prefix}`;
+    const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries?datastoreName=${DATASTORE_NAME}&prefix=${prefix}&limit=100`;
     const res = await axios.get(url, {
       headers: { "x-api-key": API_KEY }
     });
@@ -73,7 +73,7 @@ async function listDataStoreKeys(prefix) {
   }
 }
 
-// Fungsi ambil data dari Roblox DataStore
+// Fungsi ambil data dari DataStore
 async function fetchDataStore(key) {
   try {
     const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${key}`;
@@ -86,11 +86,11 @@ async function fetchDataStore(key) {
   }
 }
 
-// Fungsi hitung total durasi hari ini untuk SATU user (semua sesi)
-async function getTotalDurasiUserHariIni(username, dateKey) {
+// Fungsi hitung total durasi untuk satu user di tanggal tertentu
+async function getTotalDurasiUserByDate(username, dateKey) {
   try {
-    // List semua keys untuk user di tanggal ini
-    const keys = await listDataStoreKeys(`${username}-${dateKey}`);
+    const prefix = `${username}-${dateKey}`;
+    const keys = await listDataStoreKeys(prefix);
     
     let totalMenit = 0;
     
@@ -110,8 +110,8 @@ async function getTotalDurasiUserHariIni(username, dateKey) {
   }
 }
 
-// Fungsi hitung total durasi hari ini SEMUA admin (dengan cache)
-async function getTotalDurasiHariIni() {
+// Fungsi hitung total durasi hari ini SEMUA admin
+async function getTotalDurasiHariIni(forceRefresh = false) {
   const now = new Date();
   const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
   
@@ -119,13 +119,15 @@ async function getTotalDurasiHariIni() {
   if (statsCache.currentDate !== todayKey) {
     statsCache.totalHariIni = {};
     statsCache.currentDate = todayKey;
+    statsCache.lastUpdateHariIni = null;
     console.log("🔄 Reset cache karena ganti hari");
   }
   
-  // Cek cache (refresh setiap 2 menit)
-  if (statsCache.lastUpdateHariIni && 
-      (Date.now() - statsCache.lastUpdateHariIni) < 2 * 60 * 1000 &&
-      statsCache.totalHariIni[todayKey]) {
+  // Cek cache (refresh setiap 1 menit, kecuali force refresh)
+  if (!forceRefresh && 
+      statsCache.lastUpdateHariIni && 
+      (Date.now() - statsCache.lastUpdateHariIni) < 1 * 60 * 1000 &&
+      statsCache.totalHariIni[todayKey] !== undefined) {
     return statsCache.totalHariIni[todayKey];
   }
   
@@ -133,7 +135,7 @@ async function getTotalDurasiHariIni() {
   let totalMenit = 0;
   
   for (const username of ADMIN_LIST) {
-    const userTotal = await getTotalDurasiUserHariIni(username, todayKey);
+    const userTotal = await getTotalDurasiUserByDate(username, todayKey);
     totalMenit += userTotal;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -147,15 +149,16 @@ async function getTotalDurasiHariIni() {
   return totalMenit;
 }
 
-// Fungsi hitung total durasi bulan ini (dengan cache)
-async function getTotalDurasiBulanIni() {
+// Fungsi hitung total durasi bulan ini
+async function getTotalDurasiBulanIni(forceRefresh = false) {
   const now = new Date();
   const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   
-  // Cek cache (refresh setiap 10 menit)
-  if (statsCache.lastUpdateBulanIni && 
-      (Date.now() - statsCache.lastUpdateBulanIni) < 10 * 60 * 1000 &&
-      statsCache.totalBulanIni[monthKey]) {
+  // Cek cache (refresh setiap 5 menit, kecuali force refresh)
+  if (!forceRefresh &&
+      statsCache.lastUpdateBulanIni && 
+      (Date.now() - statsCache.lastUpdateBulanIni) < 5 * 60 * 1000 &&
+      statsCache.totalBulanIni[monthKey] !== undefined) {
     return statsCache.totalBulanIni[monthKey];
   }
   
@@ -171,7 +174,7 @@ async function getTotalDurasiBulanIni() {
     const dateKey = `${tahun}-${bulan}-${tanggal}`;
     
     for (const username of ADMIN_LIST) {
-      const userTotal = await getTotalDurasiUserHariIni(username, dateKey);
+      const userTotal = await getTotalDurasiUserByDate(username, dateKey);
       totalMenit += userTotal;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -197,7 +200,7 @@ function formatDurasi(totalMenit) {
   return `${menit} menit`;
 }
 
-// Fungsi kirim SATU embed saja ke Discord
+// Fungsi kirim embed ke Discord
 async function sendDiscordEmbed(data) {
   const joinTime = new Date(data.joinTime * 1000);
   const leaveTime = new Date(data.leaveTime * 1000);
@@ -205,9 +208,9 @@ async function sendDiscordEmbed(data) {
   const joinStr = joinTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   const leaveStr = leaveTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   
-  // Hitung statistik
-  const totalHariIni = await getTotalDurasiHariIni();
-  const totalBulanIni = await getTotalDurasiBulanIni();
+  // Force refresh stats setelah ada sesi baru
+  const totalHariIni = await getTotalDurasiHariIni(true);
+  const totalBulanIni = await getTotalDurasiBulanIni(true);
   
   const now = new Date();
   const tanggal = now.toLocaleDateString("id-ID", { 
@@ -268,28 +271,26 @@ async function checkAdmins() {
   const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
   
   for (const username of ADMIN_LIST) {
-    // List semua keys untuk user hari ini
-    const keys = await listDataStoreKeys(`${username}-${todayKey}`);
+    const prefix = `${username}-${todayKey}`;
+    const keys = await listDataStoreKeys(prefix);
     
-    // Ambil entry terbaru
-    if (keys.length > 0) {
-      // Sort by key (assuming timestamp in key)
-      keys.sort((a, b) => b.key.localeCompare(a.key));
+    for (const keyObj of keys) {
+      const data = await fetchDataStore(keyObj.key);
       
-      const latestKey = keys[0].key;
-      const data = await fetchDataStore(latestKey);
-      
-      if (data && data.leaveTime) {
-        const cacheKey = `${username}-${todayKey}`;
-        const lastLeave = lastLeaveTimes[cacheKey];
+      // Hanya proses jika ada leaveTime (sesi sudah selesai)
+      if (data && data.joinTime && data.leaveTime) {
+        const sessionId = `${keyObj.key}-${data.leaveTime}`;
         
-        // Hanya kirim jika leaveTime berubah
-        if (lastLeave !== data.leaveTime) {
+        // Cek apakah sesi ini sudah pernah dikirim
+        if (!sessionHistory[sessionId]) {
+          console.log(`🆕 Sesi baru ditemukan: ${username} (${keyObj.key})`);
           await sendDiscordEmbed(data);
-          lastLeaveTimes[cacheKey] = data.leaveTime;
+          sessionHistory[sessionId] = true;
           saveCache();
         }
       }
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
     
     await new Promise(resolve => setTimeout(resolve, 100));
