@@ -96,14 +96,31 @@ async function fetchDataStore(key) {
   }
 }
 
-// Fungsi list keys dengan prefix
+// Fungsi list keys dengan prefix - dengan pagination untuk ambil SEMUA keys
 async function listDataStoreKeys(prefix) {
   try {
-    const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries?datastoreName=${DATASTORE_NAME}&prefix=${prefix}&limit=100`;
-    const res = await axios.get(url, {
-      headers: { "x-api-key": API_KEY }
-    });
-    return res.data.keys || [];
+    let allKeys = [];
+    let cursor = null;
+    
+    do {
+      const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries?datastoreName=${DATASTORE_NAME}&prefix=${prefix}&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+      const res = await axios.get(url, {
+        headers: { "x-api-key": API_KEY }
+      });
+      
+      if (res.data.keys) {
+        allKeys = allKeys.concat(res.data.keys);
+      }
+      
+      cursor = res.data.nextPageCursor;
+      
+      // Delay kecil untuk avoid rate limit
+      if (cursor) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    } while (cursor);
+    
+    return allKeys;
   } catch (err) {
     console.error("❌ Error listing keys:", err.message);
     return [];
@@ -325,6 +342,8 @@ async function checkAdmins() {
     const prefix = `${username}-${todayKey}`;
     const keys = await listDataStoreKeys(prefix);
     
+    console.log(`   ${username}: ${keys.length} keys ditemukan`);
+    
     for (const keyObj of keys) {
       const datastoreKey = keyObj.key;
       
@@ -340,6 +359,7 @@ async function checkAdmins() {
       // CEK: Apakah sesi sudah selesai (ada leaveTime)?
       if (!data || !data.leaveTime) {
         // Player masih online atau data tidak lengkap, skip
+        console.log(`   ⏳ ${username}: Sesi masih berjalan (no leaveTime)`);
         continue;
       }
       
@@ -352,9 +372,9 @@ async function checkAdmins() {
       
       if (success) {
         newSessions++;
-        console.log(`   ✅ Ditandai sebagai sudah dikirim: ${datastoreKey}`);
+        console.log(`   ✅ Ditandai sebagai sudah dikirim`);
         // Delay untuk avoid Discord rate limit
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
       } else {
         console.log(`   ❌ Gagal kirim, tidak ditandai`);
       }
