@@ -24,7 +24,7 @@ const ADMIN_LIST = [
   "Oktaa_cmll",
   "DIAL3010",
   "UNF0RGIVEN77",
-  "Raina_rain02"
+  "raina_rain02"
 ];
 
 // 🧠 cache untuk deteksi perubahan
