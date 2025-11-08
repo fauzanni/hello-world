@@ -27,25 +27,44 @@ const ADMIN_LIST = [
   "raina_rain02"
 ];
 
-// 🧠 cache untuk deteksi perubahan
+// 🧠 cache untuk deteksi perubahan dan statistik
 const CACHE_FILE = "cache.json";
 let lastLeaveTimes = {};
+let statsCache = {
+  totalHariIni: 0,
+  totalBulanIni: 0,
+  lastUpdateHariIni: null,
+  lastUpdateBulanIni: null
+};
 
 // 🔹 Load cache kalau sudah ada
 if (fs.existsSync(CACHE_FILE)) {
   try {
-    lastLeaveTimes = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+    const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+    lastLeaveTimes = data.lastLeaveTimes || {};
+    statsCache = data.statsCache || statsCache;
     console.log("🗂️ Cache berhasil dimuat dari cache.json");
   } catch {
     console.warn("⚠️ Gagal baca cache.json, mulai dari kosong.");
   }
 }
 
-// Fungsi ambil data dari Roblox DataStore
-async function fetchDataStore(username) {
+// Fungsi simpan cache
+function saveCache() {
   try {
-    const date = new Date();
-    const key = `${username}-${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({
+      lastLeaveTimes,
+      statsCache
+    }, null, 2));
+  } catch (err) {
+    console.error("❌ Gagal simpan cache:", err.message);
+  }
+}
+
+// Fungsi ambil data dari Roblox DataStore
+async function fetchDataStore(username, dateKey) {
+  try {
+    const key = `${username}-${dateKey}`;
     const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${key}`;
     const res = await axios.get(url, {
       headers: { "x-api-key": API_KEY }
@@ -56,49 +75,81 @@ async function fetchDataStore(username) {
   }
 }
 
-// Fungsi hitung total durasi hari ini (semua admin)
+// Fungsi hitung total durasi hari ini (dengan cache 5 menit)
 async function getTotalDurasiHariIni() {
+  const now = new Date();
+  const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+  
+  // Cek cache (refresh setiap 5 menit)
+  if (statsCache.lastUpdateHariIni && 
+      (Date.now() - statsCache.lastUpdateHariIni) < 5 * 60 * 1000 &&
+      statsCache.todayKey === todayKey) {
+    return statsCache.totalHariIni;
+  }
+  
   let totalMenit = 0;
   
   for (const username of ADMIN_LIST) {
-    const data = await fetchDataStore(username);
+    const data = await fetchDataStore(username, todayKey);
     if (data && data.joinTime && data.leaveTime) {
       const durasi = Math.floor((data.leaveTime - data.joinTime) / 60);
       totalMenit += durasi;
     }
+    // Delay kecil untuk avoid rate limit
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
+  
+  // Update cache
+  statsCache.totalHariIni = totalMenit;
+  statsCache.lastUpdateHariIni = Date.now();
+  statsCache.todayKey = todayKey;
+  saveCache();
   
   return totalMenit;
 }
 
-// Fungsi hitung total durasi bulan ini (semua admin, semua hari)
+// Fungsi hitung total durasi bulan ini (dengan cache 15 menit)
 async function getTotalDurasiBulanIni() {
-  let totalMenit = 0;
   const now = new Date();
+  const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  
+  // Cek cache (refresh setiap 15 menit)
+  if (statsCache.lastUpdateBulanIni && 
+      (Date.now() - statsCache.lastUpdateBulanIni) < 15 * 60 * 1000 &&
+      statsCache.monthKey === monthKey) {
+    return statsCache.totalBulanIni;
+  }
+  
+  console.log("📊 Menghitung total bulan ini (ini займёт waktu)...");
+  
+  let totalMenit = 0;
   const tahun = now.getUTCFullYear();
   const bulan = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const jumlahHari = new Date(tahun, now.getUTCMonth() + 1, 0).getDate();
+  const hariSekarang = now.getUTCDate();
   
-  for (const username of ADMIN_LIST) {
-    for (let hari = 1; hari <= jumlahHari; hari++) {
-      try {
-        const tanggal = String(hari).padStart(2, "0");
-        const key = `${username}-${tahun}-${bulan}-${tanggal}`;
-        const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${key}`;
-        
-        const res = await axios.get(url, {
-          headers: { "x-api-key": API_KEY }
-        });
-        
-        if (res.data && res.data.joinTime && res.data.leaveTime) {
-          const durasi = Math.floor((res.data.leaveTime - res.data.joinTime) / 60);
-          totalMenit += durasi;
-        }
-      } catch {
-        // Skip kalau data tidak ada
+  // Hanya hitung sampai hari ini, bukan seluruh bulan
+  for (let hari = 1; hari <= hariSekarang; hari++) {
+    const tanggal = String(hari).padStart(2, "0");
+    const dateKey = `${tahun}-${bulan}-${tanggal}`;
+    
+    for (const username of ADMIN_LIST) {
+      const data = await fetchDataStore(username, dateKey);
+      if (data && data.joinTime && data.leaveTime) {
+        const durasi = Math.floor((data.leaveTime - data.joinTime) / 60);
+        totalMenit += durasi;
       }
+      // Delay untuk avoid rate limit
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
+  
+  // Update cache
+  statsCache.totalBulanIni = totalMenit;
+  statsCache.lastUpdateBulanIni = Date.now();
+  statsCache.monthKey = monthKey;
+  saveCache();
+  
+  console.log("✅ Total bulan ini berhasil dihitung:", totalMenit, "menit");
   
   return totalMenit;
 }
@@ -119,10 +170,9 @@ async function sendDiscordEmbed(data) {
   const joinTime = new Date(data.joinTime * 1000);
   const leaveTime = new Date(data.leaveTime * 1000);
   const durasiMenit = Math.floor((data.leaveTime - data.joinTime) / 60);
-  const joinStr = joinTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   const leaveStr = leaveTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   
-  // Hitung statistik
+  // Hitung statistik (dengan cache)
   const totalHariIni = await getTotalDurasiHariIni();
   const totalBulanIni = await getTotalDurasiBulanIni();
   
@@ -138,6 +188,7 @@ async function sendDiscordEmbed(data) {
     year: "numeric",
     month: "2-digit"
   });
+  const hariSekarang = now.getUTCDate();
 
   try {
     await axios.post(DISCORD_WEBHOOK, {
@@ -161,7 +212,7 @@ async function sendDiscordEmbed(data) {
           },
           {
             name: "📈 Rata-rata per Hari",
-            value: formatDurasi(Math.floor(totalBulanIni / now.getUTCDate())),
+            value: formatDurasi(Math.floor(totalBulanIni / hariSekarang)),
             inline: false
           }
         ],
@@ -178,15 +229,18 @@ async function sendDiscordEmbed(data) {
 // Fungsi utama cek admin
 async function checkAdmins() {
   console.log("🔍 Mengecek absensi admin...");
+  
+  const now = new Date();
+  const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+  
   for (const username of ADMIN_LIST) {
-    const data = await fetchDataStore(username);
+    const data = await fetchDataStore(username, todayKey);
     if (data && data.leaveTime) {
       const lastLeave = lastLeaveTimes[username];
       if (lastLeave !== data.leaveTime) {
         await sendDiscordEmbed(data);
         lastLeaveTimes[username] = data.leaveTime;
-        // 🔹 Simpan cache setiap update baru
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(lastLeaveTimes, null, 2));
+        saveCache();
       }
     }
   }
