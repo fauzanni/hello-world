@@ -56,6 +56,64 @@ async function fetchDataStore(username) {
   }
 }
 
+// Fungsi hitung total durasi hari ini (semua admin)
+async function getTotalDurasiHariIni() {
+  let totalMenit = 0;
+  
+  for (const username of ADMIN_LIST) {
+    const data = await fetchDataStore(username);
+    if (data && data.joinTime && data.leaveTime) {
+      const durasi = Math.floor((data.leaveTime - data.joinTime) / 60);
+      totalMenit += durasi;
+    }
+  }
+  
+  return totalMenit;
+}
+
+// Fungsi hitung total durasi bulan ini (semua admin, semua hari)
+async function getTotalDurasiBulanIni() {
+  let totalMenit = 0;
+  const now = new Date();
+  const tahun = now.getUTCFullYear();
+  const bulan = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const jumlahHari = new Date(tahun, now.getUTCMonth() + 1, 0).getDate();
+  
+  for (const username of ADMIN_LIST) {
+    for (let hari = 1; hari <= jumlahHari; hari++) {
+      try {
+        const tanggal = String(hari).padStart(2, "0");
+        const key = `${username}-${tahun}-${bulan}-${tanggal}`;
+        const url = `https://apis.roblox.com/datastores/v1/universes/${UNIVERSE_ID}/standard-datastores/datastore/entries/entry?datastoreName=${DATASTORE_NAME}&entryKey=${key}`;
+        
+        const res = await axios.get(url, {
+          headers: { "x-api-key": API_KEY }
+        });
+        
+        if (res.data && res.data.joinTime && res.data.leaveTime) {
+          const durasi = Math.floor((res.data.leaveTime - res.data.joinTime) / 60);
+          totalMenit += durasi;
+        }
+      } catch {
+        // Skip kalau data tidak ada
+      }
+    }
+  }
+  
+  return totalMenit;
+}
+
+// Fungsi format durasi (menit ke jam & menit)
+function formatDurasi(totalMenit) {
+  const jam = Math.floor(totalMenit / 60);
+  const menit = totalMenit % 60;
+  
+  if (jam > 0) {
+    return `${jam} jam ${menit} menit`;
+  }
+  return `${menit} menit`;
+}
+
 // Fungsi kirim embed ke Discord
 async function sendDiscordEmbed(data) {
   const joinTime = new Date(data.joinTime * 1000);
@@ -63,6 +121,23 @@ async function sendDiscordEmbed(data) {
   const durasiMenit = Math.floor((data.leaveTime - data.joinTime) / 60);
   const joinStr = joinTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   const leaveStr = leaveTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
+  
+  // Hitung statistik
+  const totalHariIni = await getTotalDurasiHariIni();
+  const totalBulanIni = await getTotalDurasiBulanIni();
+  
+  const now = new Date();
+  const tanggal = now.toLocaleDateString("id-ID", { 
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const bulan = now.toLocaleDateString("id-ID", { 
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit"
+  });
 
   try {
     await axios.post(DISCORD_WEBHOOK, {
@@ -70,10 +145,26 @@ async function sendDiscordEmbed(data) {
         title: "📋 Absensi Admin",
         description: [
           `**Username:** ${data.username}`,
-          `**Masuk:** ${joinStr}`,
-          `**Keluar:** ${leaveStr}`,
-          `**Durasi:** ${durasiMenit} menit`
+          `**⏰ Waktu Keluar:** ${leaveStr}`,
+          `**⏱️ Durasi Sesi Ini:** ${durasiMenit} menit`
         ].join("\n"),
+        fields: [
+          {
+            name: `📅 Total Bermain Hari Ini (${tanggal})`,
+            value: formatDurasi(totalHariIni),
+            inline: false
+          },
+          {
+            name: `📊 Total Bermain Bulan Ini (${bulan})`,
+            value: formatDurasi(totalBulanIni),
+            inline: false
+          },
+          {
+            name: "📈 Rata-rata per Hari",
+            value: formatDurasi(Math.floor(totalBulanIni / now.getUTCDate())),
+            inline: false
+          }
+        ],
         color: 0x00b0f4,
         timestamp: new Date().toISOString()
       }]
