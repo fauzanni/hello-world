@@ -213,6 +213,33 @@ function formatDurasi(totalMenit) {
   return `${menit} menit`;
 }
 
+// Hitung total user hari ini
+async function getTotalUserHariIni(username) {
+  const now = new Date();
+  const todayKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+  return await getTotalDurasiUserByDate(username, todayKey);
+}
+
+// Hitung total user bulan ini
+async function getTotalUserBulanIni(username) {
+  const now = new Date();
+  const tahun = now.getUTCFullYear();
+  const bulan = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const hariSekarang = now.getUTCDate();
+  
+  let totalMenit = 0;
+  
+  for (let hari = 1; hari <= hariSekarang; hari++) {
+    const tanggal = String(hari).padStart(2, "0");
+    const dateKey = `${tahun}-${bulan}-${tanggal}`;
+    const userTotal = await getTotalDurasiUserByDate(username, dateKey);
+    totalMenit += userTotal;
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  
+  return totalMenit;
+}
+
 // Kirim notifikasi Discord
 async function sendDiscordEmbed(data, datastoreKey) {
   const joinTime = new Date(data.joinTime * 1000);
@@ -221,9 +248,9 @@ async function sendDiscordEmbed(data, datastoreKey) {
   const joinStr = joinTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   const leaveStr = leaveTime.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" });
   
-  // Force refresh stats setelah sesi baru
-  const totalHariIni = await getTotalDurasiHariIni(true);
-  const totalBulanIni = await getTotalDurasiBulanIni(true);
+  // Hitung total untuk user ini
+  const totalUserHariIni = await getTotalUserHariIni(data.username);
+  const totalUserBulanIni = await getTotalUserBulanIni(data.username);
   
   const now = new Date();
   const tanggal = now.toLocaleDateString("id-ID", { 
@@ -251,18 +278,18 @@ async function sendDiscordEmbed(data, datastoreKey) {
         ].join("\n"),
         fields: [
           {
-            name: `📅 Total Bermain Hari Ini (${tanggal})`,
-            value: formatDurasi(totalHariIni),
+            name: `📅 Total Hari Ini (${tanggal})`,
+            value: formatDurasi(totalUserHariIni),
             inline: false
           },
           {
-            name: `📊 Total Bermain Bulan Ini (${bulan})`,
-            value: formatDurasi(totalBulanIni),
+            name: `📊 Total Bulan Ini (${bulan})`,
+            value: formatDurasi(totalUserBulanIni),
             inline: false
           },
           {
             name: "📈 Rata-rata per Hari",
-            value: formatDurasi(Math.floor(totalBulanIni / hariSekarang)),
+            value: formatDurasi(Math.floor(totalUserBulanIni / hariSekarang)),
             inline: false
           }
         ],
@@ -318,12 +345,18 @@ async function checkAdmins() {
       
       // Sesi baru yang selesai dan belum pernah dikirim!
       console.log(`🆕 Sesi baru selesai: ${username}`);
+      console.log(`   Key: ${datastoreKey}`);
+      console.log(`   JoinTime: ${data.joinTime}, LeaveTime: ${data.leaveTime}`);
+      
       const success = await sendDiscordEmbed(data, datastoreKey);
       
       if (success) {
         newSessions++;
+        console.log(`   ✅ Ditandai sebagai sudah dikirim: ${datastoreKey}`);
         // Delay untuk avoid Discord rate limit
         await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        console.log(`   ❌ Gagal kirim, tidak ditandai`);
       }
       
       await new Promise(resolve => setTimeout(resolve, 50));
