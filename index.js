@@ -13,13 +13,10 @@ const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK;
 
 const ADMIN_LIST = [
   "xbryuu",
-  "milkycats_06",
   "Kuroko_Stanly",
   "mike_ezxo",
   "meme_jelimey",
-  "Efaja9",
   "Naynayy036",
-  "X_hunterss07",
   "Oktaa_cmll",
   "DIAL3010",
   "UNF0RGIVEN77",
