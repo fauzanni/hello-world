@@ -18,7 +18,6 @@ const ADMIN_LIST = [
   "Naynayy036",
   "Oktaa_cmll",
   "DIAL3010",
-  "UNF0RGIVEN77",
   "raina_rain02",
   "GgelLs95",
   "sotakunnnn019"
